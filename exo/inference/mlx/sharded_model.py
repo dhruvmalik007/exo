@@ -4,15 +4,24 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.models.base import KVCache
 from mlx_lm.sample_utils import top_p_sampling
-
+#from exo.networking.discovery import 
+#from exo.networking
 from ..shard import Shard
+
+class CacheStatus():
+    cachevalue: list[KVCache]
+    version: int
+    
+    def __init__(self, _cachevalue:list[KVCache], _version: int ) -> None:
+        self.cachevalue = _cachevalue
+        self.version = _version
+    
 
 class StatefulShardedModel:
     def __init__(self, shard: Shard, model: nn.Module):
         self.shard = shard
         self.model = model
         self.reset()
-
     def step(
         self,
         x,
@@ -36,8 +45,7 @@ class StatefulShardedModel:
 
             return token
 
-        y = x
-
+        y = x   
         output = self.model(y[None] if self.shard.is_first_layer() else y, cache=self.cache)
 
         if self.shard.is_last_layer():
@@ -45,8 +53,7 @@ class StatefulShardedModel:
             y = sample(logits)
             return y
         else:
-            return output
-
+            return output        
     def __call__(
             self,
             x,

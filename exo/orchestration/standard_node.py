@@ -13,7 +13,8 @@ from exo.topology.partitioning_strategy import Partition, PartitioningStrategy, 
 from exo import DEBUG
 from exo.helpers import AsyncCallbackSystem
 from exo.viz.topology_viz import TopologyViz
-
+from exo.inference.mlx.sharded_model import StatefulShardedModel, CacheStatus
+from mlx_lm.models.base import KVCache
 class StandardNode(Node):
     def __init__(self, id: str, server: Server, inference_engine: InferenceEngine, discovery: Discovery, partitioning_strategy: PartitioningStrategy = None, max_generate_tokens: int = 256, chatgpt_api_endpoint: Optional[str] = None, web_chat_url: Optional[str] = None, disable_tui: Optional[bool] = False):
         self.id = id
@@ -30,7 +31,8 @@ class StandardNode(Node):
         self._on_token = AsyncCallbackSystem[str, Tuple[str, List[int], bool]]()
         self._on_opaque_status = AsyncCallbackSystem[str, Tuple[str, str]]()
         self._on_opaque_status.register("node_status").on_next(self.on_node_status)
-
+        self.state_shard_kvCache = CacheStatus(_cachevalue=[], _version=0)
+        self.state_shard = StatefulShardedModel(Shard(model_id="", shard_id="", end_layer=""), model="")
     def on_node_status(self, request_id, opaque_status):
         try:
             status_data = json.loads(opaque_status)
@@ -95,6 +97,15 @@ class StandardNode(Node):
             asyncio.create_task(self.forward_to_next_shard(shard, result, request_id, inference_state=inference_state))
 
         return np.array(self.buffered_token_output[request_id][0]) if len(self.buffered_token_output[request_id][0]) > 0 else None
+
+    def update_and_broadcast_kv_cache(self):
+        if not self.state_shard_kvCache.cachevalue:
+            self.state_shard.reset()
+            
+        if self.state_shard_kvCache.cachevalue != self.state_shard.cache and self.state_shard_kvCache.cachevalue <= self.state_shard.cache:
+            self.stateful_sharded_model.current_cache.cachevalue = self.state_shard.cache
+            self.stateful_sharded_model.current_cache.version += 1
+        asyncio.create_task(self.stateful_sharded_model)
 
     async def process_tensor(self, base_shard: Shard, tensor: np.ndarray, request_id: Optional[str] = None, inference_state: Optional[str] = None) -> Optional[np.ndarray]:
         shard = self.get_current_shard(base_shard)
@@ -309,7 +320,6 @@ class StandardNode(Node):
         await asyncio.gather(*[send_status_to_peer(peer) for peer in self.peers], return_exceptions=True)
         # in the case of opaque status, we also want to receive our own opaque statuses
         self.on_opaque_status.trigger_all(request_id, status)
-
     @property
     def current_topology(self) -> Topology:
         return self.topology
