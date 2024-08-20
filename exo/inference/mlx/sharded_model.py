@@ -7,6 +7,7 @@ from mlx_lm.sample_utils import top_p_sampling
 #from exo.networking.discovery import 
 #from exo.networking
 from ..shard import Shard
+from exo.networking.grpc.grpc_discovery import GRPCDiscovery
 
 class CacheStatus():
     cachevalue: list[KVCache]
@@ -21,6 +22,7 @@ class StatefulShardedModel:
     def __init__(self, shard: Shard, model: nn.Module):
         self.shard = shard
         self.model = model
+        self.known_topology = GRPCDiscovery()
         self.reset()
     def step(
         self,
@@ -70,3 +72,5 @@ class StatefulShardedModel:
             else self.model.n_kv_heads
         )
         self.cache = [KVCache(self.model.head_dim, n) for n in kv_heads]
+        
+        ## TODO: should it require to update the initial state to the subset of the nodes       

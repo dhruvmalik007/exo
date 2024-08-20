@@ -15,6 +15,8 @@ from exo.helpers import AsyncCallbackSystem
 from exo.viz.topology_viz import TopologyViz
 from exo.inference.mlx.sharded_model import StatefulShardedModel, CacheStatus
 from mlx_lm.models.base import KVCache
+
+
 class StandardNode(Node):
     def __init__(self, id: str, server: Server, inference_engine: InferenceEngine, discovery: Discovery, partitioning_strategy: PartitioningStrategy = None, max_generate_tokens: int = 256, chatgpt_api_endpoint: Optional[str] = None, web_chat_url: Optional[str] = None, disable_tui: Optional[bool] = False):
         self.id = id
@@ -98,14 +100,14 @@ class StandardNode(Node):
 
         return np.array(self.buffered_token_output[request_id][0]) if len(self.buffered_token_output[request_id][0]) > 0 else None
 
-    def update_and_broadcast_kv_cache(self):
+    def broadcast_kv_cache(self):
         if not self.state_shard_kvCache.cachevalue:
             self.state_shard.reset()
             
         if self.state_shard_kvCache.cachevalue != self.state_shard.cache and self.state_shard_kvCache.cachevalue <= self.state_shard.cache:
             self.stateful_sharded_model.current_cache.cachevalue = self.state_shard.cache
             self.stateful_sharded_model.current_cache.version += 1
-        asyncio.create_task(self.stateful_sharded_model)
+        asyncio.create_task(self.broadcast_result())
 
     async def process_tensor(self, base_shard: Shard, tensor: np.ndarray, request_id: Optional[str] = None, inference_state: Optional[str] = None) -> Optional[np.ndarray]:
         shard = self.get_current_shard(base_shard)
@@ -305,6 +307,20 @@ class StandardNode(Node):
                 traceback.print_exc()
 
         await asyncio.gather(*[send_result_to_peer(peer) for peer in self.peers], return_exceptions=True)
+
+    async def broadcast_kv_cache(self, updated_values) -> None:
+        async def send_kv_cache_to_all_peers(peer, updated_values):
+            try:
+                await asyncio.wait_for(peer.send_kv_cache(updated_values), timeout=15.0)
+            except asyncio.TimeoutError:
+                print(f"Timeout broadcasting kv cache to {peer.id()}")
+            except Exception as e:
+                print(f"Error broadcasting kv cache to {peer.id()}: {e}")
+                import traceback
+                traceback.print_exc()
+
+        await asyncio.gather(*[send_kv_cache_to_all_peers(peer, updated_values) for peer in self.peers], return_exceptions=True)
+
 
     async def broadcast_opaque_status(self, request_id: str, status: str) -> None:
         async def send_status_to_peer(peer):
